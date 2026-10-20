@@ -1,5 +1,6 @@
+use QuanLyKhachSanStarSaiGon
 -- ========================================================
--- PHAN 5: TAO 5 FUNCTION / STORED PROCEDURE 
+-- PHAN 5: TAO 5 FUNCTION / STORED PROCEDURE (SINH VIEN NAM 2-3)
 -- ========================================================
 
 -- 1. HÀM TÌM PHÒNG TRỐNG THEO LOẠI PHÒNG VÀ KHOẢNG THỜI GIAN
@@ -27,7 +28,6 @@ RETURN (
             AND (@NgayNhan < PDP.NgayTraDuKien AND @NgayTra > PDP.NgayNhanDuKien)
       )
 );
-GO
 
 -- 2. HÀM TÍNH TỔNG DOANH THU THEO THÁNG/NĂM
 CREATE OR ALTER FUNCTION fn_DoanhThuThang (
@@ -45,63 +45,49 @@ BEGIN
     
     RETURN ISNULL(@TongDoanhThu, 0);
 END;
-GO
 
--- 3. THỦ TỤC THÊM DỊCH VỤ SỬ DỤNG CHO PHIẾU ĐẶT PHÒNG
--- Lưu ý: Bảng ChiTietSuDungDichVu có khóa chính là (MaDatPhong, MaDichVu)
--- Nên nếu khách dùng cùng 1 dịch vụ 2 lần, ta phải UPDATE số lượng thay vì INSERT
-CREATE OR ALTER PROCEDURE sp_ThemDichVu (
-    @MaDatPhong VARCHAR(10),
-    @MaDichVu VARCHAR(10),
-    @SoLuong INT
-)
-AS
-BEGIN
-    DECLARE @DonGia DECIMAL(18,2);
-    
-    -- Lấy đơn giá hiện tại của dịch vụ
-    SELECT @DonGia = DonGia FROM DichVu WHERE MaDichVu = @MaDichVu;
-    
-    -- Kiểm tra xem dịch vụ này đã được thêm cho phiếu đặt phòng này chưa
-    IF EXISTS (SELECT 1 FROM ChiTietSuDungDichVu WHERE MaDatPhong = @MaDatPhong AND MaDichVu = @MaDichVu)
-    BEGIN
-        -- Nếu có rồi thì cộng dồn số lượng
-        UPDATE ChiTietSuDungDichVu
-        SET SoLuong = SoLuong + @SoLuong,
-            ThoiDiemSuDung = GETDATE(),
-            DonGiaTaiThoiDiemSuDung = @DonGia
-        WHERE MaDatPhong = @MaDatPhong AND MaDichVu = @MaDichVu;
-    END
-    ELSE
-    BEGIN
-        -- Nếu chưa có thì thêm mới
-        INSERT INTO ChiTietSuDungDichVu (MaDatPhong, MaDichVu, SoLuong, ThoiDiemSuDung, DonGiaTaiThoiDiemSuDung)
-        VALUES (@MaDatPhong, @MaDichVu, @SoLuong, GETDATE(), @DonGia);
-    END
-END;
-GO
-
--- 4. THỦ TỤC CẬP NHẬT TRẠNG THÁI KHI KHÁCH CHECK-OUT
-CREATE OR ALTER PROCEDURE sp_CheckOut (
+-- 3. HÀM LẤY CHI TIẾT DỊCH VỤ ĐÃ SỬ DỤNG THEO PHIẾU ĐẶT PHÒNG
+CREATE OR ALTER FUNCTION dbo.fn_ChiTietDichVuTheoDatPhong
+(
     @MaDatPhong VARCHAR(10)
 )
+RETURNS TABLE
 AS
-BEGIN
-    -- 1. Cập nhật trạng thái phiếu đặt phòng
-    UPDATE PhieuDatPhong
-    SET TrangThaiDat = N'Đã trả phòng'
-    WHERE MaDatPhong = @MaDatPhong;
+RETURN
+(
+    SELECT
+        MaDatPhong,
+        MaDichVu,
+        SoLuong,
+        ThoiDiemSuDung,
+        DonGiaTaiThoiDiemSuDung,
+        CAST(SoLuong * DonGiaTaiThoiDiemSuDung AS DECIMAL(18,2))
+            AS ThanhTienDichVu
+    FROM ChiTietSuDungDichVu
+    WHERE MaDatPhong = @MaDatPhong
+);
 
-    -- 2. Cập nhật trạng thái các phòng thuộc phiếu đặt này thành 'Trống'
-    UPDATE Phong
-    SET TinhTrangPhong = N'Trống'
-    WHERE MaPhong IN (
-        SELECT MaPhong 
-        FROM ChiTietDatPhong 
-        WHERE MaDatPhong = @MaDatPhong
-    );
-END;
-GO
+-- 4. HÀM LẤY THÔNG TIN PHÒNG VÀ TRẠNG THÁI ĐẶT PHÒNG KHI CHECK-OUT
+CREATE OR ALTER FUNCTION dbo.fn_ThongTinPhongCheckOut
+(
+    @MaDatPhong VARCHAR(10)
+)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT
+        PDP.MaDatPhong,
+        PDP.TrangThaiDat,
+        CTDP.MaPhong,
+        P.TinhTrangPhong
+    FROM PhieuDatPhong AS PDP
+    LEFT JOIN ChiTietDatPhong AS CTDP
+        ON PDP.MaDatPhong = CTDP.MaDatPhong
+    LEFT JOIN Phong AS P
+        ON CTDP.MaPhong = P.MaPhong
+    WHERE PDP.MaDatPhong = @MaDatPhong
+);
 
 -- 5. HÀM TÍNH TỔNG TIỀN PHÒNG CỦA MỘT PHIẾU ĐẶT PHÒNG
 CREATE OR ALTER FUNCTION fn_TinhTienPhong (
@@ -131,10 +117,9 @@ BEGIN
 
     RETURN ISNULL(@TienPhong, 0);
 END;
-GO
 
 -- ========================================================
--- PHAN 6: KIEM TRA CAC FUNCTION / PROCEDURE VUA TAO
+-- PHAN 6: KIEM TRA CAC FUNCTION
 -- ========================================================
 
 -- 1. Kiểm tra hàm tìm phòng trống
@@ -144,14 +129,15 @@ SELECT * FROM fn_TimPhongTrong('LP01', '2026-10-15', '2026-10-17');
 -- 2. Kiểm tra hàm tính doanh thu tháng 10 năm 2026
 SELECT dbo.fn_DoanhThuThang(10, 2026) AS DoanhThuThang10;
 
--- 3. Kiểm tra thủ tục thêm dịch vụ (Thêm 1 chai nước suối cho phiếu DP02)
-EXEC sp_ThemDichVu @MaDatPhong = 'DP02', @MaDichVu = 'DV01', @SoLuong = 1;
-SELECT * FROM ChiTietSuDungDichVu WHERE MaDatPhong = 'DP02';
+-- 3. Kiểm tra hàm tra cứu chi tiết dịch vụ theo phiếu đặt phòng 
+SELECT * FROM dbo.fn_ChiTietDichVuTheoDatPhong('DP02');
 
 -- 4. Kiểm tra thủ tục Check-out (Cho phiếu DP01 trả phòng)
-EXEC sp_CheckOut @MaDatPhong = 'DP01';
-SELECT MaDatPhong, TrangThaiDat FROM PhieuDatPhong WHERE MaDatPhong = 'DP01';
-SELECT MaPhong, TinhTrangPhong FROM Phong WHERE MaPhong = 'P101';
+SELECT * FROM dbo.fn_ThongTinPhongCheckOut('DP01');
 
 -- 5. Kiểm tra hàm tính tiền phòng của phiếu DP02
 SELECT dbo.fn_TinhTienPhong('DP02') AS TienPhongDP02;
+
+
+
+
